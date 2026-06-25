@@ -1,7 +1,10 @@
-from fastapi import APIRouter, Header, HTTPException, Request
+import uuid
+import math
+from fastapi import APIRouter, Header, HTTPException
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 
+from models.schemas import ChatMessage
 from services.ai_service import AIService
 from services.supabase_service import supabase
 
@@ -58,70 +61,121 @@ def _save_message(conversation_id: str, role: str, content: str) -> str:
     return result.data[0]["id"]
 
 
-def _save_journal_entry(user_id: str, message_id: str, journal: dict) -> None:
-    entry_result = supabase.table("journal_entries").insert({
+def _save_journal_entry(
+    user_id: str,
+    journal: dict,
+    source: str = "chat",
+    message_id: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Persist journal_entry + journal_lines to Supabase.
+    Uses the Phase 1 extended schema (status, source, ai_generated, reference_number, total_debit, total_credit).
+    Returns the journal entry ID on success, None on failure.
+    """
+    lines = journal.get("lines", [])
+    total_debit = sum(float(l.get("debit", 0)) for l in lines)
+    total_credit = sum(float(l.get("credit", 0)) for l in lines)
+
+    entry_payload = {
         "user_id": user_id,
-        "message_id": message_id,
-        "entry_date": journal.get("entry_date"),
-        "description": journal.get("description"),
-        "reference": journal.get("reference"),
-        "total_amount": journal.get("total_amount"),
-        "transaction_type": journal.get("transaction_type"),
+        "created_by": user_id,
+        "entry_date": journal.get("entry_date") or date.today().isoformat(),
+        "description": journal.get("description", ""),
+        "reference_number": journal.get("reference") or journal.get("reference_number"),
+        "total_amount": float(journal.get("total_amount", 0)),
+        "total_debit": round(total_debit, 2),
+        "total_credit": round(total_credit, 2),
+        "transaction_type": journal.get("transaction_type", "expense"),
+        "status": "posted",
+        "source": source,
+        "ai_generated": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
-    }).execute()
+    }
 
-    entry_id = entry_result.data[0]["id"]
+    try:
+        entry_result = supabase.table("journal_entries").insert(entry_payload).execute()
+        entry_id = entry_result.data[0]["id"]
+    except Exception as e:
+        print(f"[DB] journal_entries insert failed: {e}")
+        # Fallback: try without new columns in case migration hasn't run yet
+        try:
+            fallback_payload = {
+                "user_id": user_id,
+                "entry_date": entry_payload["entry_date"],
+                "description": entry_payload["description"],
+                "total_amount": entry_payload["total_amount"],
+                "transaction_type": entry_payload["transaction_type"],
+                "created_at": entry_payload["created_at"],
+            }
+            entry_result = supabase.table("journal_entries").insert(fallback_payload).execute()
+            entry_id = entry_result.data[0]["id"]
+        except Exception as e2:
+            print(f"[DB] journal_entries fallback insert also failed: {e2}")
+            return None
 
-    lines = [
-        {
+    # Insert journal lines
+    line_rows = []
+    for line in lines:
+        line_rows.append({
             "journal_entry_id": entry_id,
             "account_name": line.get("account_name"),
             "account_type": line.get("account_type"),
             "debit": float(line.get("debit", 0)),
             "credit": float(line.get("credit", 0)),
             "description": line.get("description"),
-        }
-        for line in journal.get("lines", [])
-    ]
-    if lines:
-        supabase.table("journal_lines").insert(lines).execute()
+            "narration": line.get("narration") or line.get("description"),
+        })
+
+    if line_rows:
+        try:
+            supabase.table("journal_lines").insert(line_rows).execute()
+        except Exception as e:
+            print(f"[DB] journal_lines insert failed: {e}")
+
+    return entry_id
 
 
-# ─── Route ────────────────────────────────────────────────────────────────────
+def _load_chart_of_accounts(user_id: str) -> list:
+    """Load chart_of_accounts for AI context (global seed + user-specific)."""
+    try:
+        result = (
+            supabase.table("chart_of_accounts")
+            .select("account_code, account_name, account_type, account_sub_type")
+            .eq("is_active", True)
+            .order("account_code")
+            .execute()
+        )
+        return result.data or []
+    except Exception:
+        # Fallback to legacy accounts table
+        try:
+            result = (
+                supabase.table("accounts")
+                .select("account_name, account_type, account_code")
+                .eq("user_id", user_id)
+                .eq("is_active", True)
+                .order("account_type")
+                .execute()
+            )
+            return result.data or []
+        except Exception as e2:
+            print(f"[DB] Could not load accounts: {e2}")
+            return []
+
+
+# ─── Routes ───────────────────────────────────────────────────────────────────
 
 @router.post("/message")
 async def send_message(
-    request: Request,
+    payload: ChatMessage,
     authorization: Optional[str] = Header(None),
 ):
-    """
-    Accept either:
-      - JSON body: { "message": "...", "conversation_id": "...", "user_id": "..." }
-      - Multipart form: message=..., conversation_id=..., user_id=..., file=<binary>
-    Authorization header (Bearer <supabase_jwt>) takes precedence over body user_id.
-    """
-    content_type = request.headers.get("content-type", "")
+    message = payload.message.strip()
+    conversation_id = payload.conversation_id or None
+    body_user_id = payload.user_id or None
 
-    if "multipart/form-data" in content_type:
-        form = await request.form()
-        message = str(form.get("message", "")).strip()
-        conversation_id = str(form.get("conversation_id", "")).strip() or None
-        body_user_id = str(form.get("user_id", "")).strip() or None
-        file_upload = form.get("file")
-        if file_upload and hasattr(file_upload, "read"):
-            file_data = await file_upload.read()
-            file_name = getattr(file_upload, "filename", "attachment")
-        else:
-            file_data, file_name = None, None
-    else:
-        body = await request.json()
-        message = str(body.get("message", "")).strip()
-        conversation_id = body.get("conversation_id") or None
-        body_user_id = body.get("user_id") or None
-        file_data, file_name = None, None
-
-    if not message and not file_data:
-        raise HTTPException(status_code=400, detail="message or file is required")
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
 
     user_id = _extract_user_id(authorization, body_user_id)
     if not user_id:
@@ -130,24 +184,32 @@ async def send_message(
             detail="Authentication required. Send a Bearer token in Authorization header or pass user_id in the request body.",
         )
 
+    try:
+        uuid.UUID(user_id)
+        valid_user_id = user_id
+    except ValueError:
+        valid_user_id = str(uuid.uuid4())
+
     # ── Conversation + history (DB errors are non-fatal) ──────────────────────
     history: list = []
     resolved_conv_id: Optional[str] = conversation_id
 
     try:
-        resolved_conv_id = _get_or_create_conversation(user_id, conversation_id)
+        resolved_conv_id = _get_or_create_conversation(valid_user_id, conversation_id)
         history = _load_history(resolved_conv_id)
     except Exception as db_err:
         print(f"[DB] Could not load conversation: {db_err}")
         resolved_conv_id = conversation_id or f"local-{user_id}"
+
+    # ── Load chart of accounts for AI context (non-fatal) ─────────────────────
+    user_accounts = _load_chart_of_accounts(valid_user_id)
 
     # ── AI processing ─────────────────────────────────────────────────────────
     try:
         ai_result = ai_service.process_message(
             message=message,
             chat_history=history,
-            file_data=file_data,
-            file_name=file_name,
+            accounts=user_accounts or None,
         )
     except Exception as ai_err:
         raise HTTPException(status_code=500, detail=f"AI error: {ai_err}")
@@ -157,11 +219,12 @@ async def send_message(
     journal_entry: Optional[dict] = ai_result.get("journal_entry") if has_journal else None
 
     # ── Persist messages + journal entry (DB errors are non-fatal) ────────────
+    journal_entry_id: Optional[str] = None
     try:
         _save_message(resolved_conv_id, "user", message)
-        ai_msg_id = _save_message(resolved_conv_id, "assistant", reply)
+        _save_message(resolved_conv_id, "assistant", reply)
         if has_journal and journal_entry:
-            _save_journal_entry(user_id, ai_msg_id, journal_entry)
+            journal_entry_id = _save_journal_entry(valid_user_id, journal_entry, source="chat")
     except Exception as save_err:
         print(f"[DB] Could not save messages: {save_err}")
 
@@ -169,5 +232,6 @@ async def send_message(
         "reply": reply,
         "has_journal_entry": has_journal,
         "journal_entry": journal_entry,
+        "journal_entry_id": journal_entry_id,
         "conversation_id": resolved_conv_id,
     }

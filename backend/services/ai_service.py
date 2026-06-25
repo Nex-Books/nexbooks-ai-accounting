@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import base64
 from datetime import date
 from typing import Optional
 from google import genai
@@ -9,9 +10,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+
 # ─── System Prompt ────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are Aryan, a Senior Chartered Accountant (CA) at NexBooks — India's AI-powered accounting platform. You have 15+ years of experience serving Indian MSMEs, startups, and companies across sectors.
+ACCOUNTING_SYSTEM_PROMPT = """You are CA NexBot, a Senior Chartered Accountant (CA) at NexBooks — India's AI-powered accounting platform. You have 15+ years of experience serving Indian MSMEs, startups, and companies across sectors.
 
 Your expertise:
 • Indian Accounting Standards (Ind AS) and GAAP
@@ -74,7 +77,7 @@ Return EXACTLY:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ACCOUNTING RULES (STRICT):
 1. Sum of all debit amounts MUST equal sum of all credit amounts.
-2. account_type must be exactly: "Asset", "Liability", "Equity", "Income", or "Expense"
+2. account_type must be exactly: "Asset", "Liability", "Equity", "Revenue", or "Expense"
 3. debit and credit values are numbers (not strings). Use 0.00 when not applicable.
 4. entry_date: today's date unless user specifies another.
 5. reference: JE-001 format (increment conceptually per conversation).
@@ -84,18 +87,20 @@ ACCOUNTING RULES (STRICT):
 STANDARD CHART OF ACCOUNTS (use these exact names):
 
 ASSETS:
-- Cash
-- Bank Account
+- Cash in Hand
+- Bank Account – Current
 - Petty Cash
 - Accounts Receivable
-- Inventory
-- Fixed Assets
+- Inventory – Finished Goods
+- Computers & IT Equipment
+- Fixed Assets (use specific: Land & Building / Plant & Machinery / Vehicles)
 - GST Input Credit – CGST
 - GST Input Credit – SGST
 - GST Input Credit – IGST
 - TDS Receivable
 - Prepaid Expenses
 - Security Deposit
+- Advance to Suppliers
 
 LIABILITIES:
 - Accounts Payable
@@ -106,35 +111,37 @@ LIABILITIES:
 - Salary Payable
 - PF Payable
 - ESI Payable
-- Loans Payable
+- Short-term Loan
 - Bank Overdraft
 
 EQUITY:
-- Owner's Capital
-- Retained Earnings
 - Share Capital
+- Retained Earnings
+- Owner's Capital
 - Drawings
 
-INCOME:
-- Sales Revenue
-- Service Revenue
+REVENUE:
+- Sales Revenue – Goods
+- Sales Revenue – Services
 - Interest Income
 - Commission Income
+- Rental Income
 - Other Income
 
 EXPENSES:
 - Rent Expense
-- Salary Expense
-- Office Expense
-- Utilities Expense
+- Salary & Wages Expense
+- Office Supplies
+- Electricity & Utilities
 - Depreciation Expense
-- Professional Fees Expense
-- Marketing Expense
+- Professional Fees
+- Marketing & Advertising
 - Travel Expense
-- Repairs & Maintenance Expense
+- Repairs & Maintenance
 - Insurance Expense
 - Bank Charges
 - Miscellaneous Expense
+- Cost of Goods Sold
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 GST RULES:
@@ -154,38 +161,90 @@ TDS RULES:
 • Section 194J (Professional fees): 10%
   Dr Professional Fees Expense (gross), Cr TDS Payable (10%), Cr Bank (net)
 • Section 194C (Contractor): 1% individuals / 2% others
-• TDS received: Dr Bank (net) + Dr TDS Receivable (TDS amount), Cr Service Revenue (gross)
+• TDS received: Dr Bank (net) + Dr TDS Receivable (TDS amount), Cr Revenue (gross)
 
 PAYROLL RULES:
-• PF contribution (employer): 12% of basic salary → Dr Salary Expense, Cr PF Payable
-• ESI (employer, if salary ≤ ₹21,000): 3.25% → Dr Salary Expense, Cr ESI Payable
-• Net salary paid: Dr Salary Payable, Cr Bank
+• PF contribution (employer): 12% of basic salary → Dr Salary & Wages Expense, Cr PF Payable
+• ESI (employer, if salary ≤ ₹21,000): 3.25% → Dr Salary & Wages Expense, Cr ESI Payable
+• Net salary paid: Dr Salary Payable, Cr Bank Account – Current
 
 REFERENCE EXAMPLES:
-1. "paid rent 10000" → Dr Rent Expense 10000 / Cr Bank Account 10000
+1. "paid rent 10000" → Dr Rent Expense 10000 / Cr Bank Account – Current 10000
 2. "paid office rent 10000 + GST 18%" → Dr Rent Expense 10000 + Dr GST Input–CGST 900 + Dr GST Input–SGST 900 / Cr Bank 11800
-3. "received from client 25000" → Dr Bank Account 25000 / Cr Service Revenue 25000
-4. "paid salary 30000" → Dr Salary Expense 30000 / Cr Bank Account 30000
-5. "bought laptop 50000" → Dr Fixed Assets 50000 / Cr Bank Account 50000
+3. "received from client 25000" → Dr Bank Account – Current 25000 / Cr Sales Revenue – Services 25000
+4. "paid salary 30000" → Dr Salary & Wages Expense 30000 / Cr Bank Account – Current 30000
+5. "bought laptop 50000" → Dr Computers & IT Equipment 50000 / Cr Bank Account – Current 50000
 6. "GST payment 5000" → Dr GST Payable–CGST 2500 + Dr GST Payable–SGST 2500 / Cr Bank 5000
-7. "paid professional fees 20000" (TDS applicable) → Dr Professional Fees Expense 20000 / Cr TDS Payable 2000 + Cr Bank 18000
+7. "paid professional fees 20000" (TDS applicable) → Dr Professional Fees 20000 / Cr TDS Payable 2000 + Cr Bank 18000
 
 Maintain a professional, clear, concise tone. Use Indian business terminology (lakh, crore, FY, etc.) where appropriate."""
+
+# ─── Invoice Extraction Prompt ────────────────────────────────────────────────
+
+INVOICE_EXTRACTION_PROMPT = """You are a document analysis expert specialising in Indian GST invoices. Extract all data from this invoice image/PDF and return ONLY valid JSON with no markdown or extra text.
+
+Return this exact structure:
+{
+  "invoice_number": "INV-001",
+  "vendor_name": "Vendor Company Name",
+  "vendor_gstin": "22AAAAA0000A1Z5",
+  "buyer_name": "Buyer Company Name",
+  "buyer_gstin": "27BBBBB1111B2Y6",
+  "invoice_date": "YYYY-MM-DD",
+  "due_date": "YYYY-MM-DD",
+  "invoice_type": "purchase",
+  "place_of_supply": "Maharashtra",
+  "supply_type": "intrastate",
+  "subtotal": 100000.00,
+  "cgst_amount": 9000.00,
+  "sgst_amount": 9000.00,
+  "igst_amount": 0.00,
+  "cess_amount": 0.00,
+  "total_amount": 118000.00,
+  "line_items": [
+    {
+      "description": "Software Development Services",
+      "hsn_sac_code": "998314",
+      "quantity": 1.0,
+      "rate": 100000.00,
+      "amount": 100000.00,
+      "gst_rate": 18.0,
+      "cgst_amount": 9000.00,
+      "sgst_amount": 9000.00,
+      "igst_amount": 0.00
+    }
+  ],
+  "tds_applicable": false,
+  "tds_section": null,
+  "tds_rate": 0.0,
+  "tds_amount": 0.0,
+  "narration": "Brief description of what this invoice is for"
+}
+
+Rules:
+- invoice_type: "purchase" if we are buying (vendor is selling to us), "sale" if we are selling
+- supply_type: "intrastate" if same state GST codes (CGST+SGST applies), "interstate" if different states (IGST applies)
+- If CGST+SGST present: supply_type = "intrastate"; if IGST present: supply_type = "interstate"
+- tds_applicable: true if this is a service invoice > ₹30,000 (194J) or rent > ₹2.4L/year (194I) or contractor payment (194C)
+- tds_section: "194J" for professional/technical services, "194C" for contractors, "194I" for rent, "194A" for interest
+- All amounts as numbers, not strings
+- If any field is not found, use null for text fields and 0.0 for numeric fields
+- invoice_date format: YYYY-MM-DD (convert from any format found on invoice)"""
+
+# ─── Config ───────────────────────────────────────────────────────────────────
+
+_chat_config = types.GenerateContentConfig(
+    system_instruction=ACCOUNTING_SYSTEM_PROMPT,
+    temperature=0.2,
+    max_output_tokens=2048,
+    response_mime_type="application/json",
+)
+
 
 # ─── AI Service ───────────────────────────────────────────────────────────────
 
 class AIService:
-    def __init__(self):
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY not set in environment")
-        self.client = genai.Client(api_key=api_key)
-        self.config = types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            temperature=0.2,
-            max_output_tokens=2048,
-            response_mime_type="application/json",
-        )
+    # ── Chat / Transaction Recording ──────────────────────────────────────────
 
     def process_message(
         self,
@@ -193,6 +252,7 @@ class AIService:
         chat_history: list = None,
         file_data: Optional[bytes] = None,
         file_name: Optional[str] = None,
+        accounts: list = None,
     ) -> dict:
         today = date.today().isoformat()
         prompt = f"[Today's date: {today}]\n\n{message}"
@@ -203,27 +263,58 @@ class AIService:
                 "Extract transaction details from this invoice/receipt and create the appropriate journal entry.]"
             )
 
+        # Use dynamic config when user has custom accounts, otherwise fall back to default
+        if accounts:
+            config = types.GenerateContentConfig(
+                system_instruction=self._build_dynamic_prompt(accounts),
+                temperature=0.2,
+                max_output_tokens=2048,
+                response_mime_type="application/json",
+            )
+        else:
+            config = _chat_config
+
         contents = self._build_contents(chat_history or [], prompt)
-
-        response = self.client.models.generate_content(
-            model="gemini-2.0-flash",
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
             contents=contents,
-            config=self.config,
+            config=config,
         )
+        response_text = response.text.strip()
+        return self._parse_response(response_text)
 
-        return self._parse_response(response.text)
+    def _build_dynamic_prompt(self, accounts: list) -> str:
+        by_type: dict = {}
+        for acc in accounts:
+            t = acc.get("account_type", "Other")
+            name = acc.get("account_name", "")
+            code = acc.get("account_code", "")
+            by_type.setdefault(t, []).append(f"{name} [{code}]")
+
+        lines = [
+            "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            "CUSTOM CHART OF ACCOUNTS (USER-DEFINED — OVERRIDES STANDARD CHART ABOVE):",
+            "Use ONLY these accounts for all journal entries for this user.\n",
+        ]
+        for type_name in ["Asset", "Liability", "Equity", "Revenue", "Expense"]:
+            accs = by_type.get(type_name, [])
+            if accs:
+                lines.append(f"{type_name.upper()}:")
+                lines.extend(f"- {a}" for a in accs)
+                lines.append("")
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+        return ACCOUNTING_SYSTEM_PROMPT + "\n".join(lines)
 
     def _build_contents(self, chat_history: list, current_prompt: str) -> list:
-        """Build contents list for the new SDK: history + current user message."""
         contents = []
         last_role = None
 
-        for msg in chat_history[-20:]:  # cap at last 20 messages
+        for msg in chat_history[-20:]:
             role = "model" if msg.get("role") == "assistant" else "user"
             content = msg.get("content", "")
 
             if role == last_role and contents:
-                # Merge consecutive same-role messages
                 contents[-1].parts[0].text += "\n" + content
             else:
                 contents.append(
@@ -231,7 +322,7 @@ class AIService:
                 )
                 last_role = role
 
-        # Strip trailing user turns so the current message is the only user turn at the end
+        # Ensure the final turn is always the current user message
         while contents and contents[-1].role == "user":
             contents.pop()
 
@@ -240,15 +331,197 @@ class AIService:
         )
         return contents
 
+    # ── Invoice Processing ────────────────────────────────────────────────────
+
+    def extract_invoice(
+        self,
+        file_bytes: bytes,
+        mime_type: str,
+        filename: str,
+    ) -> dict:
+        """
+        Use Gemini Vision (gemini-2.5-flash) to extract structured invoice data
+        from a PDF or image file.
+        """
+        # Determine the correct MIME type
+        ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+        mime_map = {
+            "pdf": "application/pdf",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "png": "image/png",
+            "webp": "image/webp",
+        }
+        resolved_mime = mime_map.get(ext, mime_type or "application/octet-stream")
+
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part(
+                                inline_data=types.Blob(
+                                    mime_type=resolved_mime,
+                                    data=file_bytes,
+                                )
+                            ),
+                            types.Part(text=INVOICE_EXTRACTION_PROMPT),
+                        ],
+                    )
+                ],
+                config=types.GenerateContentConfig(
+                    temperature=0.1,
+                    max_output_tokens=4096,
+                    response_mime_type="application/json",
+                ),
+            )
+            return self._parse_response(response.text.strip())
+        except Exception as e:
+            raise RuntimeError(f"Gemini invoice extraction failed: {e}")
+
+    def build_invoice_journal_entry(
+        self,
+        invoice_data: dict,
+        entry_date: str = None,
+    ) -> dict:
+        """
+        Given extracted invoice data, construct the journal entry dict.
+        Returns the same structure as the chat journal_entry for consistency.
+        """
+        inv_type = invoice_data.get("invoice_type", "purchase").lower()
+        supply_type = invoice_data.get("supply_type", "intrastate").lower()
+        vendor = invoice_data.get("vendor_name", "Unknown Vendor")
+        subtotal = float(invoice_data.get("subtotal") or 0)
+        cgst = float(invoice_data.get("cgst_amount") or 0)
+        sgst = float(invoice_data.get("sgst_amount") or 0)
+        igst = float(invoice_data.get("igst_amount") or 0)
+        total = float(invoice_data.get("total_amount") or 0)
+        inv_num = invoice_data.get("invoice_number", "")
+        narration = invoice_data.get("narration", f"Invoice {inv_num} from {vendor}")
+        eff_date = entry_date or invoice_data.get("invoice_date") or date.today().isoformat()
+        tds_amount = float(invoice_data.get("tds_amount") or 0)
+
+        lines = []
+
+        if inv_type == "purchase":
+            # PURCHASE: Dr Expense/Asset + Dr Input GST → Cr Accounts Payable
+            lines.append({
+                "account_name": "Cost of Goods Sold",  # Override per line items if possible
+                "account_type": "Expense",
+                "debit": round(subtotal, 2),
+                "credit": 0.0,
+                "description": f"Purchase from {vendor} — {narration}",
+            })
+            if cgst > 0:
+                lines.append({
+                    "account_name": "GST Input Credit – CGST",
+                    "account_type": "Asset",
+                    "debit": round(cgst, 2),
+                    "credit": 0.0,
+                    "description": "Input CGST on purchase",
+                })
+            if sgst > 0:
+                lines.append({
+                    "account_name": "GST Input Credit – SGST",
+                    "account_type": "Asset",
+                    "debit": round(sgst, 2),
+                    "credit": 0.0,
+                    "description": "Input SGST on purchase",
+                })
+            if igst > 0:
+                lines.append({
+                    "account_name": "GST Input Credit – IGST",
+                    "account_type": "Asset",
+                    "debit": round(igst, 2),
+                    "credit": 0.0,
+                    "description": "Input IGST on purchase",
+                })
+            # TDS deducted reduces payable
+            net_payable = round(total - tds_amount, 2)
+            if tds_amount > 0:
+                lines.append({
+                    "account_name": "TDS Payable",
+                    "account_type": "Liability",
+                    "debit": 0.0,
+                    "credit": round(tds_amount, 2),
+                    "description": f"TDS deducted u/s {invoice_data.get('tds_section','194J')} @ {invoice_data.get('tds_rate',0)}%",
+                })
+            lines.append({
+                "account_name": "Accounts Payable",
+                "account_type": "Liability",
+                "debit": 0.0,
+                "credit": round(net_payable, 2),
+                "description": f"Amount payable to {vendor}",
+            })
+
+        else:
+            # SALE: Dr Accounts Receivable → Cr Revenue + Cr Output GST
+            lines.append({
+                "account_name": "Accounts Receivable",
+                "account_type": "Asset",
+                "debit": round(total, 2),
+                "credit": 0.0,
+                "description": f"Receivable from {invoice_data.get('buyer_name', 'Customer')}",
+            })
+            lines.append({
+                "account_name": "Sales Revenue – Services",
+                "account_type": "Revenue",
+                "debit": 0.0,
+                "credit": round(subtotal, 2),
+                "description": f"Sales revenue — {narration}",
+            })
+            if cgst > 0:
+                lines.append({
+                    "account_name": "GST Payable – CGST",
+                    "account_type": "Liability",
+                    "debit": 0.0,
+                    "credit": round(cgst, 2),
+                    "description": "Output CGST on sale",
+                })
+            if sgst > 0:
+                lines.append({
+                    "account_name": "GST Payable – SGST",
+                    "account_type": "Liability",
+                    "debit": 0.0,
+                    "credit": round(sgst, 2),
+                    "description": "Output SGST on sale",
+                })
+            if igst > 0:
+                lines.append({
+                    "account_name": "GST Payable – IGST",
+                    "account_type": "Liability",
+                    "debit": 0.0,
+                    "credit": round(igst, 2),
+                    "description": "Output IGST on sale",
+                })
+
+        # Validate: debits must equal credits
+        total_dr = sum(l["debit"] for l in lines)
+        total_cr = sum(l["credit"] for l in lines)
+        if abs(total_dr - total_cr) > 0.01:
+            # Self-heal: adjust the last credit line
+            diff = round(total_dr - total_cr, 2)
+            lines[-1]["credit"] = round(lines[-1]["credit"] + diff, 2)
+
+        return {
+            "description": narration,
+            "entry_date": eff_date,
+            "reference": f"INV-{inv_num}" if inv_num else "INV-AI",
+            "lines": lines,
+            "total_amount": round(total, 2),
+            "transaction_type": "expense" if inv_type == "purchase" else "income",
+        }
+
+    # ── Parsing Helpers ───────────────────────────────────────────────────────
+
     def _parse_response(self, text: str) -> dict:
-        """Parse Gemini response to dict with fallbacks."""
-        # Primary: direct JSON parse (expected when response_mime_type=application/json)
         try:
             return json.loads(text)
         except json.JSONDecodeError:
             pass
 
-        # Fallback 1: JSON inside markdown code block
         match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
         if match:
             try:
@@ -256,7 +529,6 @@ class AIService:
             except json.JSONDecodeError:
                 pass
 
-        # Fallback 2: first JSON object in text
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if match:
             try:
@@ -264,5 +536,51 @@ class AIService:
             except json.JSONDecodeError:
                 pass
 
-        # Last resort: return as plain reply
         return {"reply": text, "has_journal_entry": False, "journal_entry": None}
+
+
+    # ── Bank Statement Processing ─────────────────────────────────────────────
+
+    async def extract_bank_statement(self, csv_text: str) -> dict:
+        """
+        Uses Gemini to extract structured transactions from a raw CSV bank statement.
+        """
+        prompt = f"""You are a data extraction expert. Parse the following raw bank statement CSV and return a valid JSON object with an array of transactions.
+Ignore headers, empty lines, and balance rows. Extract only actual debits/withdrawals and credits/deposits.
+
+Expected JSON format:
+{{
+  "transactions": [
+    {{
+      "date": "YYYY-MM-DD",
+      "description": "UPI/Zomato/1234",
+      "amount": -500.00
+    }},
+    {{
+      "date": "YYYY-MM-DD",
+      "description": "NEFT from Client XYZ",
+      "amount": 25000.00
+    }}
+  ]
+}}
+
+Rules:
+1. Amount MUST be positive for deposits (credits) and negative for withdrawals (debits).
+2. Date MUST be in YYYY-MM-DD format.
+3. Return ONLY valid JSON, no markdown.
+
+CSV Data:
+{csv_text}
+"""
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.1,
+                    response_mime_type="application/json",
+                ),
+            )
+            return self._parse_response(response.text.strip())
+        except Exception as e:
+            raise RuntimeError(f"Failed to parse bank statement with AI: {e}")
