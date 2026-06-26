@@ -2,21 +2,21 @@
 import { Button, Icon, useColorMode } from '@chakra-ui/react'
 // Custom Icons
 import { IoMdMoon, IoMdSunny } from 'react-icons/io'
-import React, { useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import { isWindowAvailable } from 'utils/navigation'
 
 export default function FixedPlugin (props: { [x: string]: any }) {
   const { ...rest } = props
   const { colorMode, toggleColorMode } = useColorMode()
-  let bgButton = 'linear-gradient(135deg, #868CFF 0%, #4318FF 100%)'
+  const bgButton = 'linear-gradient(135deg, #868CFF 0%, #4318FF 100%)'
+  const [position, setPosition] = useState({ left: '', right: '35px' })
 
-  let left = ''
-  let right = '35px'
   useEffect(() => {
-    if (isWindowAvailable() || window.document.documentElement.dir !== 'rtl')
-      return
-    ;[left, right] = [right, left]
-  })
+    if (!isWindowAvailable()) return
+
+    const isRtl = window.document.documentElement.dir === 'rtl'
+    setPosition(isRtl ? { left: '35px', right: '' } : { left: '', right: '35px' })
+  }, [])
 
   return (
     <Button
@@ -27,8 +27,8 @@ export default function FixedPlugin (props: { [x: string]: any }) {
       zIndex='99'
       position='fixed'
       variant='no-effects'
-      left={left}
-      right={right}
+      left={position.left}
+      right={position.right}
       bottom='30px'
       border='1px solid'
       borderColor='#6A53FF'

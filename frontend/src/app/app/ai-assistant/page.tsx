@@ -485,7 +485,7 @@ export default function AIAssistantPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [input, attachedFile, isLoading, conversationId, user]);
+  }, [input, attachedFile, isLoading, conversationId, user, toast]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }

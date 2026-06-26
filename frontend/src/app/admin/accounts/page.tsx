@@ -256,7 +256,7 @@ export default function AccountsPage() {
 
                 {accts.length === 0 ? (
                   <Text color={mutedColor} fontSize="sm" px="25px" pb="20px">
-                    No accounts yet. Click "Add Account" to create one.
+                    No accounts yet. Click &quot;Add Account&quot; to create one.
                   </Text>
                 ) : (
                   <Table variant="simple" color="gray.500" mb="12px">

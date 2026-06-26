@@ -211,7 +211,7 @@ export default function ProfitLossPage() {
                 xaxis: { categories: monthlyData.map(m => m.month), labels: { style: { colors: TEXT_MUTED } }, axisBorder: { show: false }, axisTicks: { show: false } },
                 yaxis: { labels: { formatter: (v: number) => `₹${Number(v).toLocaleString('en-IN')}`, style: { colors: TEXT_MUTED } } },
                 colors: ['#01B574', '#EE5D50'],
-                plotOptions: { bar: { borderRadius: 5, columnWidth: '60%', grouped: true } },
+                plotOptions: { bar: { borderRadius: 5, columnWidth: '60%' } },
                 dataLabels: { enabled: false },
                 legend: { position: 'top', labels: { colors: TEXT_BODY } },
                 grid: { borderColor: BORDER, strokeDashArray: 4 },

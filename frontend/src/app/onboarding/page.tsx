@@ -296,7 +296,7 @@ export default function OnboardingPage() {
                 <Alert status="info" borderRadius="12px" fontSize="xs">
                   <AlertIcon />
                   <AlertDescription>
-                    Don't worry — you can change all these settings anytime from <strong>Settings → Tax & Compliance</strong>.
+                    Don&apos;t worry — you can change all these settings anytime from <strong>Settings → Tax & Compliance</strong>.
                   </AlertDescription>
                 </Alert>
               </Flex>
@@ -310,7 +310,7 @@ export default function OnboardingPage() {
                 align="center" justify="center" mb="20px">
                 <Icon as={RiRobot2Line} w="36px" h="36px" color={GREEN} />
               </Flex>
-              <Text fontSize="2xl" fontWeight="900" color={DARK} mb="8px">You're all set!</Text>
+              <Text fontSize="2xl" fontWeight="900" color={DARK} mb="8px">You&apos;re all set!</Text>
               <Text fontSize="sm" color={MUTED} mb="24px" maxW="380px">
                 {form.company_name
                   ? `${form.company_name}'s AI Accountant is ready. Just tell it what happened and it will handle all the accounting automatically.`
