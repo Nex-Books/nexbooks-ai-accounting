@@ -478,7 +478,7 @@ export default function AIAssistantPage() {
         {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
-          content: 'Sorry, I could not reach the server. Please make sure the backend is running at http://localhost:8000.',
+          content: `Sorry, an error occurred:\n\n${msg}`,
           timestamp: new Date(),
         },
       ]);

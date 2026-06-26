@@ -308,7 +308,7 @@ def void_journal_entry(
 
 # ─── GET /api/journal-entries/ledger ─────────────────────────────────────────
 
-@router.get("/ledger")
+@router.get("/account/ledger")
 def get_ledger(
     account_name: str = Query(...),
     date_from: Optional[str] = Query(None),

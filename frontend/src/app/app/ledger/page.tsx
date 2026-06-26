@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Badge, Box, Button, Flex, Grid, Icon, Input, InputGroup, InputLeftElement,
   Skeleton, Table, Tbody, Td, Text, Th, Thead, Tr,
-  Stat, StatLabel, StatNumber, StatHelpText,
+  Stat, StatLabel, StatNumber, StatHelpText, Select,
 } from '@chakra-ui/react';
 import {
   MdAccountBalance, MdFilterList, MdRefresh, MdSearch,
@@ -100,7 +100,7 @@ export default function LedgerPage() {
       if (dateFrom) params.append('date_from', dateFrom);
       if (dateTo) params.append('date_to', dateTo);
 
-      const res = await fetch(`${API}/api/journal-entries/ledger?${params}`, {
+      const res = await fetch(`${API}/api/journal-entries/account/ledger?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error('Failed to fetch ledger');
