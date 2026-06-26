@@ -1,0 +1,12 @@
+{
+  "name": "nexbooks-ai-accounting",
+  "private": true,
+  "packageManager": "yarn@1.22.22",
+  "scripts": {
+    "build": "cd frontend && yarn build",
+    "start": "cd frontend && yarn start"
+  },
+  "dependencies": {
+    "next": "^15.1.4"
+  }
+}
