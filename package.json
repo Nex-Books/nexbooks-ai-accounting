@@ -3,10 +3,6 @@
   "private": true,
   "packageManager": "yarn@1.22.22",
   "scripts": {
-    "build": "cd frontend && yarn build",
-    "start": "cd frontend && yarn start"
-  },
-  "dependencies": {
-    "next": "^15.1.4"
+    "vercel-build": "cd frontend && yarn install && yarn build"
   }
 }

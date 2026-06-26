@@ -24,3 +24,5 @@ Thumbs.db
 
 # Migrations that contain sensitive data or are already applied
 # (keep migrations/ tracked for schema reference)
+.vercel
+.env*
