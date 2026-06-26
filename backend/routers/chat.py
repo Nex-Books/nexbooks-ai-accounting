@@ -163,6 +163,21 @@ def _load_chart_of_accounts(user_id: str) -> list:
             return []
 
 
+def _load_business_profile(user_id: str) -> dict:
+    """Load business profile for AI context injection."""
+    try:
+        result = (
+            supabase.table("business_profiles")
+            .select("*")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        return result.data[0] if result.data else {}
+    except Exception as e:
+        print(f"[DB] Could not load business profile: {e}")
+        return {}
+
+
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
 @router.post("/message")
@@ -204,12 +219,16 @@ async def send_message(
     # ── Load chart of accounts for AI context (non-fatal) ─────────────────────
     user_accounts = _load_chart_of_accounts(valid_user_id)
 
+    # ── Load business profile for AI context (non-fatal) ──────────────────────
+    business_profile = _load_business_profile(valid_user_id)
+
     # ── AI processing ─────────────────────────────────────────────────────────
     try:
         ai_result = ai_service.process_message(
             message=message,
             chat_history=history,
             accounts=user_accounts or None,
+            business_profile=business_profile or None,
         )
     except Exception as ai_err:
         raise HTTPException(status_code=500, detail=f"AI error: {ai_err}")

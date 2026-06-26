@@ -253,6 +253,7 @@ class AIService:
         file_data: Optional[bytes] = None,
         file_name: Optional[str] = None,
         accounts: list = None,
+        business_profile: dict = None,
     ) -> dict:
         today = date.today().isoformat()
         prompt = f"[Today's date: {today}]\n\n{message}"
@@ -263,16 +264,14 @@ class AIService:
                 "Extract transaction details from this invoice/receipt and create the appropriate journal entry.]"
             )
 
-        # Use dynamic config when user has custom accounts, otherwise fall back to default
-        if accounts:
-            config = types.GenerateContentConfig(
-                system_instruction=self._build_dynamic_prompt(accounts),
-                temperature=0.2,
-                max_output_tokens=2048,
-                response_mime_type="application/json",
-            )
-        else:
-            config = _chat_config
+        # Build system prompt — inject business context + custom accounts
+        system_prompt = self._build_system_prompt(accounts, business_profile)
+        config = types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            temperature=0.2,
+            max_output_tokens=2048,
+            response_mime_type="application/json",
+        )
 
         contents = self._build_contents(chat_history or [], prompt)
         response = client.models.generate_content(
@@ -283,18 +282,60 @@ class AIService:
         response_text = response.text.strip()
         return self._parse_response(response_text)
 
-    def _build_dynamic_prompt(self, accounts: list) -> str:
+    def _build_system_prompt(self, accounts: list = None, business_profile: dict = None) -> str:
+        """Build a context-aware system prompt with business profile + custom chart of accounts."""
+        base = ACCOUNTING_SYSTEM_PROMPT
+
+        # Inject business context section
+        context_lines = ["\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"]
+        context_lines.append("BUSINESS CONTEXT (Current client):")
+        if business_profile and business_profile.get("company_name"):
+            bp = business_profile
+            context_lines.append(f"• Company: {bp.get('company_name', 'Unknown')}")
+            if bp.get("business_type"):
+                context_lines.append(f"• Type: {bp.get('business_type')}")
+            if bp.get("industry"):
+                context_lines.append(f"• Industry: {bp.get('industry')}")
+            if bp.get("gstin"):
+                context_lines.append(f"• GSTIN: {bp.get('gstin')} (GST Registered)")
+                context_lines.append(f"• Always apply GST to taxable transactions for this business.")
+            elif not bp.get("gst_registered"):
+                context_lines.append(f"• NOT GST registered — do not add GST accounts to journal entries.")
+            if bp.get("tds_applicable"):
+                context_lines.append(f"• TDS APPLICABLE — deduct TDS on eligible payments.")
+            else:
+                context_lines.append(f"• TDS may not apply — only include TDS if user specifically mentions it.")
+            if bp.get("state"):
+                context_lines.append(f"• Business state: {bp.get('state')} (use for intrastate/interstate GST determination)")
+            if bp.get("currency", "INR") != "INR":
+                context_lines.append(f"• Currency: {bp.get('currency')} (convert amounts accordingly)")
+            fy_start = bp.get("financial_year_start", "April")
+            context_lines.append(f"• Financial year starts: {fy_start}")
+        else:
+            context_lines.append("• No business profile configured. Using standard Indian MSME defaults.")
+            context_lines.append("• Assume GST registered with standard 18% rate unless stated otherwise.")
+        context_lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+        base = base + "\n".join(context_lines)
+
+        # Inject custom chart of accounts if available
+        if accounts:
+            base = self._append_custom_accounts(base, accounts)
+
+        return base
+
+    def _append_custom_accounts(self, prompt: str, accounts: list) -> str:
+        """Append user's custom chart of accounts to the system prompt."""
         by_type: dict = {}
         for acc in accounts:
             t = acc.get("account_type", "Other")
             name = acc.get("account_name", "")
             code = acc.get("account_code", "")
-            by_type.setdefault(t, []).append(f"{name} [{code}]")
+            by_type.setdefault(t, []).append(f"{name}" + (f" [{code}]" if code else ""))
 
         lines = [
             "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            "CUSTOM CHART OF ACCOUNTS (USER-DEFINED — OVERRIDES STANDARD CHART ABOVE):",
-            "Use ONLY these accounts for all journal entries for this user.\n",
+            "CUSTOM CHART OF ACCOUNTS (USER-DEFINED — USE THESE FOR JOURNAL ENTRIES):",
         ]
         for type_name in ["Asset", "Liability", "Equity", "Revenue", "Expense"]:
             accs = by_type.get(type_name, [])
@@ -303,8 +344,11 @@ class AIService:
                 lines.extend(f"- {a}" for a in accs)
                 lines.append("")
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        return prompt + "\n".join(lines)
 
-        return ACCOUNTING_SYSTEM_PROMPT + "\n".join(lines)
+    def _build_dynamic_prompt(self, accounts: list) -> str:
+        """Legacy method — kept for backward compatibility."""
+        return self._build_system_prompt(accounts=accounts)
 
     def _build_contents(self, chat_history: list, current_prompt: str) -> list:
         contents = []

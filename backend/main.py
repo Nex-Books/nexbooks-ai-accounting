@@ -9,6 +9,7 @@ from routers import ai as ai_router
 from routers import journal as journal_router
 from routers import bank as bank_router
 from routers import parties as parties_router
+from routers import business as business_router
 
 app = FastAPI(
     title="NexBooks API",
@@ -16,12 +17,23 @@ app = FastAPI(
     version="2.0.0",
 )
 
+import os
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:3002",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+        "http://[::1]:3000",
+        "http://[::1]:3001",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Legacy routes (kept for backward compatibility with existing frontend)
@@ -36,6 +48,7 @@ app.include_router(ai_router.router)
 app.include_router(journal_router.router)
 app.include_router(bank_router.router)
 app.include_router(parties_router.router)
+app.include_router(business_router.router)
 
 @app.get("/health", tags=["Health"])
 def health():
