@@ -320,33 +320,43 @@ export default function AIAssistantPage() {
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
 
-  // Load state on mount
+  // Load state on mount or user change
   useEffect(() => {
+    if (!user) return;
+    const userStorageKey = `${STORAGE_KEY}_${user.id}`;
     try {
-      const storedConvId = sessionStorage.getItem(STORAGE_KEY);
-      const storedMsgs = sessionStorage.getItem(STORAGE_KEY + '_msgs');
-      if (storedConvId) setConversationId(storedConvId);
+      const storedConvId = sessionStorage.getItem(userStorageKey);
+      const storedMsgs = sessionStorage.getItem(userStorageKey + '_msgs');
+      if (storedConvId) {
+        setConversationId(storedConvId);
+      } else {
+        setConversationId(null);
+      }
+
       if (storedMsgs) {
         const parsed = JSON.parse(storedMsgs);
-        // Revive Date objects
         const revived = parsed.map((m: any) => ({
           ...m,
           timestamp: new Date(m.timestamp),
         }));
         setMessages(revived);
+      } else {
+        setMessages([WELCOME]);
       }
     } catch (e) {
       console.error('Failed to load session history', e);
     }
-  }, []);
+  }, [user]);
 
   // Save state on change
   useEffect(() => {
-    if (conversationId) sessionStorage.setItem(STORAGE_KEY, conversationId);
+    if (!user) return;
+    const userStorageKey = `${STORAGE_KEY}_${user.id}`;
+    if (conversationId) sessionStorage.setItem(userStorageKey, conversationId);
     if (messages.length > 1) {
-      sessionStorage.setItem(STORAGE_KEY + '_msgs', JSON.stringify(messages));
+      sessionStorage.setItem(userStorageKey + '_msgs', JSON.stringify(messages));
     }
-  }, [conversationId, messages]);
+  }, [conversationId, messages, user]);
 
   const bgPage = useColorModeValue('gray.50', 'gray.900');
   const bgInput = useColorModeValue('white', 'gray.800');
@@ -465,7 +475,7 @@ export default function AIAssistantPage() {
         {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
-          content: (data.reply as string) || 'Done.',
+          content: (data.reply as string) || (data.message as string) || 'Done.',
           timestamp: new Date(),
           journalEntry,
         },
