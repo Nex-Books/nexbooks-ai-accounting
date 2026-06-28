@@ -241,7 +241,7 @@ export default function DocumentsPage() {
               <Alert status="info" borderRadius="12px" fontSize="xs" maxW="400px">
                 <AlertIcon />
                 <AlertDescription>
-                  Make sure you've created a <strong>documents</strong> bucket in Supabase Storage with public or authenticated access.
+                  Make sure you&apos;ve created a <strong>documents</strong> bucket in Supabase Storage with public or authenticated access.
                 </AlertDescription>
               </Alert>
             )}
